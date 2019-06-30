@@ -11,7 +11,7 @@ The design goal is to build station that can work unattended without
 external power. It is powered by LiPo battery that is recharged by small solar
 panel.
 
-working cycle is optimized for low power consumption. The station awakes
+The working cycle is optimized for low power consumption. The station awakes
 from deep sleep at 10 (or more) minutes, measures environmental conditions,
 sends data to MQTT server and goes to sleep again.
 

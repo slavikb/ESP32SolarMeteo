@@ -1,0 +1,39 @@
+// Copy this file to local_config.h and edit appropriately
+//
+
+// WiFi settings
+#define CONFIG_WIFI_SSID "my-wifi-ssid"
+#define CONFIG_WIFI_PASS "my-wifi-password"
+
+// Operational settings
+
+// ADC calibration paremeters
+#define CONFIG_ADC_VREF_RAW 1390
+#define CONFIG_ADC_VREF_VCC 3.90
+
+// Voltage-dependent sleep intervals
+// Voltage range
+#define CONFIG_VOLTAGE_MIN  3.2
+#define CONFIG_VOLTAGE_NORM 3.7
+// Sleep interval for U >= CONFIG_VOLTAGE_NORM
+#define CONFIG_SLEEP_TIME_NORM 10*60
+// Sleep interval for U <= CONFIG_VOLTAGE_MIN
+#define CONFIG_SLEEP_TIME_MAX 60*60
+
+// MQTT server settings
+
+// Enable data upload via MQTT
+#define CONFIG_MQTT_ENABLE 1
+// MQTT server host name (for normal sending)
+#define CONFIG_MQTT_HOST "narodmon.ru"
+// MQTT server host name (for test sending after power on)
+#define CONFIG_MQTT_HOST_TEST "my-local-mqtt-server"
+// MQTT server port
+#define CONFIG_MQTT_PORT 1883
+// MQTT user name and password
+#define CONFIG_MQTT_USERNAME "my-narodmon-username"
+#define CONFIG_MQTT_PASSWORD "my-narodmon-password"
+// MQTT client ID (narodmon: device MAC address)
+#define CONFIG_MQTT_CLIENT_ID "my-narodmon-client-id"
+// MQTT topic name (narodmon: user/devname)
+#define CONFIG_MQTT_TOPIC "my-narodmon-topic"

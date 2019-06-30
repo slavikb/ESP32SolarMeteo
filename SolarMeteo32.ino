@@ -20,55 +20,27 @@
 ///////////////////////////////////////////////////////////////////
 // Definitions
 
-#define ESP_MODEL_ESP32_WEMOS 1
-#define ESP_MODEL_ESP32_CAM 2
-
-#define ESP_MODEL ESP_MODEL_ESP32_WEMOS
-//#define ESP_MODEL ESP_MODEL_ESP32_CAM
-
-#if ESP_MODEL == ESP_MODEL_ESP32_WEMOS
-
 // I2C
-#define METEO_SDA 21
-#define METEO_SCL 22
+#define CONFIG_I2C_SDA 21
+#define CONFIG_I2C_SCL 22
 
-// Internal LED
-#define METEO_INT_LED 2
-// External LED
-#define METEO_EXT_LED 17
-// Analog input for VCC measurement
-//#define METEO_ADC_VCC 33
-#define METEO_ADC_VCC 26   
-// ADC calibration
-#define METEO_VREF_ADC 1390
-#define METEO_VREF_VCC 3.90
+// Status LED
+#define CONFIG_STATUS_LED 2
+// Secondary status LED
+#define CONFIG_STATUS_LED_EX 17
+// Analog input for VCC measurement (ADC2)
+#define CONFIG_ADC2_PIN 26
 
-#elif ESP_MODEL == ESP_MODEL_ESP32_CAM
-
-// I2C
-#define METEO_SDA 13
-#define METEO_SCL 14
-
-// Internal LED
-#define METEO_INT_LED 2
-// External LED
-//#define METEO_EXT_LED 4
-// Analog input for VCC measurement
-#define METEO_ADC_VCC 12   
-// ADC calibration
-#define METEO_VREF_ADC 1790
-#define METEO_VREF_VCC 4.76
-
-#else
-# error ESP_MODEL not defined
-#endif
-
-const unsigned int TOTAL_WORK_TIMEOUT = 10;   // 10 sec
-const unsigned int TIMEOUT_TO_WDT_RESET = 5;  // Overtime to reset via RTC watchdog
+// Total work timeout (s)
+#define CONFIG_WORK_TIMEOUT 10
+// Extra time to wait after CONFIG_WORK_TIMEOUT before triggering WDT reset (s)
+#define CONFIG_TIMEOUT_TO_WDT_RESET 5
 
 const EventBits_t EVENT_BIT_WORK_DONE = BIT0;
 
+// Test mode: use test MQTT server
 //#define TEST_MODE
+// Test mode: override deep sleep timeout
 //#define TEST_DEEPSLEEP 20
 
 
@@ -103,11 +75,11 @@ uint32_t g_resetReason = 0;
 
 void LedOn(bool f)
 {
-#ifdef METEO_INT_LED
-    digitalWrite(METEO_INT_LED, f ? HIGH : LOW);
+#ifdef CONFIG_STATUS_LED
+    digitalWrite(CONFIG_STATUS_LED, f ? HIGH : LOW);
 #endif
-#ifdef METEO_EXT_LED
-    digitalWrite(METEO_EXT_LED, f ? HIGH : LOW);
+#ifdef CONFIG_STATUS_LED_EX
+    digitalWrite(CONFIG_STATUS_LED_EX, f ? HIGH : LOW);
 #endif
 }
 
@@ -127,6 +99,7 @@ void TaskLedBlink(int millisOn, int millisOff)
   delay(millisOff);
 }
 
+// Read analog multiple times and average results
 uint32_t analogReadAvg(unsigned pin, unsigned n)
 {
   uint32_t sum = 0;
@@ -137,7 +110,7 @@ uint32_t analogReadAvg(unsigned pin, unsigned n)
 
 float adcToVoltage(unsigned vadc)
 {
-    return (float)vadc * ((float)METEO_VREF_VCC / METEO_VREF_ADC);
+    return (float)vadc * ((float)CONFIG_ADC_VREF_VCC / CONFIG_ADC_VREF_RAW);
 }
 
 uint32_t calcDeepSleepTime()
@@ -163,8 +136,8 @@ uint32_t calcDeepSleepTime()
 
 bool doMeasurement(float& temp, float& hum)
 {
-#ifdef METEO_SDA
-    Wire.begin(METEO_SDA,METEO_SCL);
+#ifdef CONFIG_I2C_SDA
+    Wire.begin(CONFIG_I2C_SDA,CONFIG_I2C_SCL);
     g_am2320.begin();
     temp = g_am2320.readTemperature();
     hum = g_am2320.readHumidity();
@@ -315,11 +288,11 @@ void workTask(void *taskParm)
 
 void setup()
 {
-#ifdef METEO_INT_LED
-    pinMode(METEO_INT_LED, OUTPUT);
+#ifdef CONFIG_STATUS_LED
+    pinMode(CONFIG_STATUS_LED, OUTPUT);
 #endif
-#ifdef METEO_EXT_LED
-    pinMode(METEO_EXT_LED, OUTPUT);
+#ifdef CONFIG_STATUS_LED_EX
+    pinMode(CONFIG_STATUS_LED_EX, OUTPUT);
 #endif
     Serial.begin(115200);
 
@@ -334,7 +307,7 @@ void setup()
     else
         printf("Normal mode: woken by deep sleep or other reason\n");
 
-    g_adc = analogReadAvg(METEO_ADC_VCC, 8);
+    g_adc = analogReadAvg(CONFIG_ADC2_PIN, 8);
     g_vcc = adcToVoltage(g_adc);
     printf("Vadc=%u  Vcc=%.2f\n", g_adc, g_vcc);
 
@@ -350,7 +323,7 @@ void setup()
         printf("RTC restart failed!\n");
     }
 
-    armRtcWatchdog((TOTAL_WORK_TIMEOUT+TIMEOUT_TO_WDT_RESET) * 1000);
+    armRtcWatchdog((CONFIG_WORK_TIMEOUT+CONFIG_TIMEOUT_TO_WDT_RESET) * 1000);
 
     g_events = xEventGroupCreate();
     g_ledMutex = xSemaphoreCreateMutex();
@@ -358,10 +331,10 @@ void setup()
     xTaskCreatePinnedToCore(workTask, "work_task", configMINIMAL_STACK_SIZE * 8, NULL, 5, NULL, APP_CPU_NUM);
 
     EventBits_t ev = xEventGroupWaitBits(g_events, EVENT_BIT_WORK_DONE, 
-        pdFALSE, pdTRUE, TOTAL_WORK_TIMEOUT * 1000 / portTICK_PERIOD_MS);    
+        pdFALSE, pdTRUE, CONFIG_WORK_TIMEOUT * 1000 / portTICK_PERIOD_MS);    
 
     if ((ev & EVENT_BIT_WORK_DONE) == 0)
-        printf("Wait timeout (%d s)\n", TOTAL_WORK_TIMEOUT);
+        printf("Wait timeout (%d s)\n", CONFIG_WORK_TIMEOUT);
     else
         printf("Work done\n");
 

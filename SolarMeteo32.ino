@@ -11,26 +11,65 @@
 #include <freertos/event_groups.h>
 
 #include <rom/rtc.h>
+#include <soc/rtc_wdt.h>
+#include <driver/adc.h>
+#include <esp_wifi.h>
 
 #include "local_config.h"
 
 ///////////////////////////////////////////////////////////////////
 // Definitions
 
-//const unsigned int SDA = 21;
-//const unsigned int SCL = 22;
+#define ESP_MODEL_ESP32_WEMOS 1
+#define ESP_MODEL_ESP32_CAM 2
 
-const unsigned int INT_LED = 2;  // Internal LED
-const unsigned int EXT_LED = 17; // External LED
-//const unsigned int VCC_IN = 33;  // Analog input for VCC measurement
-const unsigned int VCC_IN = 26;  // Analog input for VCC measurement
+#define ESP_MODEL ESP_MODEL_ESP32_WEMOS
+//#define ESP_MODEL ESP_MODEL_ESP32_CAM
 
-const unsigned int TOTAL_WORK_TIMEOUT = 10; // 10 sec
+#if ESP_MODEL == ESP_MODEL_ESP32_WEMOS
+
+// I2C
+#define METEO_SDA 21
+#define METEO_SCL 22
+
+// Internal LED
+#define METEO_INT_LED 2
+// External LED
+#define METEO_EXT_LED 17
+// Analog input for VCC measurement
+//#define METEO_ADC_VCC 33
+#define METEO_ADC_VCC 26   
+// ADC calibration
+#define METEO_VREF_ADC 1390
+#define METEO_VREF_VCC 3.90
+
+#elif ESP_MODEL == ESP_MODEL_ESP32_CAM
+
+// I2C
+#define METEO_SDA 13
+#define METEO_SCL 14
+
+// Internal LED
+#define METEO_INT_LED 2
+// External LED
+//#define METEO_EXT_LED 4
+// Analog input for VCC measurement
+#define METEO_ADC_VCC 12   
+// ADC calibration
+#define METEO_VREF_ADC 1790
+#define METEO_VREF_VCC 4.76
+
+#else
+# error ESP_MODEL not defined
+#endif
+
+const unsigned int TOTAL_WORK_TIMEOUT = 10;   // 10 sec
+const unsigned int TIMEOUT_TO_WDT_RESET = 5;  // Overtime to reset via RTC watchdog
 
 const EventBits_t EVENT_BIT_WORK_DONE = BIT0;
 
-//#define DEBUG_DEEPSLEEP 10
-#define TEST_MODE
+//#define TEST_MODE
+//#define TEST_DEEPSLEEP 20
 
 
 ///////////////////////////////////////////////////////////////////
@@ -52,6 +91,7 @@ volatile uint32_t g_sendOk = false; // MQTT sending successful
 
 volatile uint32_t g_shutdown = 0; // flag: shutting down, disallow task LED access
 
+uint32_t g_adc = 0;
 float g_vcc = 0;
 float g_temperature = 0;
 float g_humidity = 0;
@@ -63,8 +103,12 @@ uint32_t g_resetReason = 0;
 
 void LedOn(bool f)
 {
-    digitalWrite(INT_LED, f ? HIGH : LOW);
-    digitalWrite(EXT_LED, f ? HIGH : LOW);
+#ifdef METEO_INT_LED
+    digitalWrite(METEO_INT_LED, f ? HIGH : LOW);
+#endif
+#ifdef METEO_EXT_LED
+    digitalWrite(METEO_EXT_LED, f ? HIGH : LOW);
+#endif
 }
 
 void TaskLedOn(bool f)
@@ -91,6 +135,11 @@ uint32_t analogReadAvg(unsigned pin, unsigned n)
   return sum/n;
 }
 
+float adcToVoltage(unsigned vadc)
+{
+    return (float)vadc * ((float)METEO_VREF_VCC / METEO_VREF_ADC);
+}
+
 uint32_t calcDeepSleepTime()
 {
     // Calculate sleep time
@@ -114,6 +163,8 @@ uint32_t calcDeepSleepTime()
 
 bool doMeasurement(float& temp, float& hum)
 {
+#ifdef METEO_SDA
+    Wire.begin(METEO_SDA,METEO_SCL);
     g_am2320.begin();
     temp = g_am2320.readTemperature();
     hum = g_am2320.readHumidity();
@@ -122,6 +173,9 @@ bool doMeasurement(float& temp, float& hum)
       return false;
 
     return true;
+#else
+    return false;
+#endif
 }
 
 bool connectWiFi()
@@ -143,6 +197,25 @@ bool connectWiFi()
     }
     printf("OK\n");
     return true;
+}
+
+void disconnectWiFi()
+{
+    WiFi.disconnect(true);
+    WiFi.mode(WIFI_OFF);
+    esp_wifi_stop();
+    esp_wifi_deinit();
+    adc_power_off();
+}
+
+void armRtcWatchdog(uint32_t msec)
+{
+    rtc_wdt_protect_off();
+    rtc_wdt_disable();
+    rtc_wdt_set_time(RTC_WDT_STAGE3, msec);
+    rtc_wdt_set_stage(RTC_WDT_STAGE3, RTC_WDT_STAGE_ACTION_RESET_RTC);
+    rtc_wdt_enable();
+    rtc_wdt_protect_on();
 }
 
 bool sendMqtt()
@@ -173,7 +246,16 @@ bool sendMqtt()
         ++nSent;
 
     unsigned MSGCNT = 3;
-    
+
+    if (g_testMode)
+    {
+        snprintf(msgBuf, sizeof(msgBuf), "%u", g_adc);
+        if (g_mqttClient.publish(CONFIG_MQTT_TOPIC "/ADC", msgBuf))
+            ++nSent;
+
+        MSGCNT += 1;
+    }
+
     if (g_measureOk)
     {
         snprintf(msgBuf, sizeof(msgBuf), "%.2f", g_temperature);
@@ -233,8 +315,12 @@ void workTask(void *taskParm)
 
 void setup()
 {
-    pinMode(INT_LED, OUTPUT);
-    pinMode(EXT_LED, OUTPUT);
+#ifdef METEO_INT_LED
+    pinMode(METEO_INT_LED, OUTPUT);
+#endif
+#ifdef METEO_EXT_LED
+    pinMode(METEO_EXT_LED, OUTPUT);
+#endif
     Serial.begin(115200);
 
     g_resetReason = rtc_get_reset_reason(0);
@@ -248,9 +334,23 @@ void setup()
     else
         printf("Normal mode: woken by deep sleep or other reason\n");
 
-    const uint32_t vadc = analogReadAvg(VCC_IN, 8);
-    g_vcc = (float)vadc * CONFIG_ADC_VOLTAGE_FACTOR;
-    printf("Vadc=%u  Vcc=%.2f\n", vadc, g_vcc);
+    g_adc = analogReadAvg(METEO_ADC_VCC, 8);
+    g_vcc = adcToVoltage(g_adc);
+    printf("Vadc=%u  Vcc=%.2f\n", g_adc, g_vcc);
+
+    if (g_adc == 0xFFF && g_resetReason != RTCWDT_RTC_RESET)
+    {
+        // restart using RTC
+        printf("Forcing RTC restart\n");
+        fflush(stdout);
+
+        armRtcWatchdog(100);
+        delay(1000);
+
+        printf("RTC restart failed!\n");
+    }
+
+    armRtcWatchdog((TOTAL_WORK_TIMEOUT+TIMEOUT_TO_WDT_RESET) * 1000);
 
     g_events = xEventGroupCreate();
     g_ledMutex = xSemaphoreCreateMutex();
@@ -290,13 +390,17 @@ void setup()
         LedOn(false);
     }
 
+    printf("Disconnecting WiFi\n");
+    
+    disconnectWiFi();
+
     uint32_t deepSleepTime = calcDeepSleepTime();
 
-    printf("Going to deep sleep for %u sec\n", deepSleepTime);
-
-#ifdef DEBUG_DEEPSLEEP
-    deepSleepTime = DEBUG_DEEPSLEEP;
+#ifdef TEST_DEEPSLEEP
+    deepSleepTime = TEST_DEEPSLEEP;
 #endif
+
+    printf("Going to deep sleep for %u sec\n", deepSleepTime);
 
     // go to deep sleep
     esp_sleep_enable_timer_wakeup(1000 * 1000 * deepSleepTime);

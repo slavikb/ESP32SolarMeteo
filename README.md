@@ -48,9 +48,9 @@ draws 0.5mA.
 
 I decided to use ADC2 for measurement because initially planned to utilize
 board with few pins (like ESP32 cam) where no ADC1 pins were available.
+
 There is a known problem with ADC2 - after WiFi operations it becomes
 unavailable - even if the device goes into deep sleep.
-
 I have found the solution to force RTC restart of the board in this case.
 This seemingly solved the problem.
 

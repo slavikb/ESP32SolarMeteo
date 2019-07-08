@@ -32,9 +32,9 @@
 #define CONFIG_ADC2_PIN 26
 
 // Total work timeout (s)
-#define CONFIG_WORK_TIMEOUT 10
+#define CONFIG_WORK_TIMEOUT 15
 // Extra time to wait after CONFIG_WORK_TIMEOUT before triggering WDT reset (s)
-#define CONFIG_TIMEOUT_TO_WDT_RESET 5
+#define CONFIG_TIMEOUT_TO_WDT_RESET 10
 
 const EventBits_t EVENT_BIT_WORK_DONE = BIT0;
 
@@ -53,7 +53,6 @@ WiFiClient g_wifiClient;
 PubSubClient g_mqttClient(g_wifiClient);
 
 EventGroupHandle_t g_events = 0;
-SemaphoreHandle_t  g_ledMutex = 0;
 
 bool g_testMode = false; // test mode: woken up not by deep sleep timer
 
@@ -81,22 +80,6 @@ void LedOn(bool f)
 #ifdef CONFIG_STATUS_LED_EX
     digitalWrite(CONFIG_STATUS_LED_EX, f ? HIGH : LOW);
 #endif
-}
-
-void TaskLedOn(bool f)
-{
-    xSemaphoreTake(g_ledMutex, portMAX_DELAY);
-    if (!g_shutdown)
-        LedOn(f);
-    xSemaphoreGive(g_ledMutex);
-}
-
-void TaskLedBlink(int millisOn, int millisOff)
-{
-  TaskLedOn(true);
-  delay(millisOn);
-  TaskLedOn(false);
-  delay(millisOff);
 }
 
 // Read analog multiple times and average results
@@ -164,7 +147,7 @@ bool connectWiFi()
           printf("FAIL\n");
           return false;
       }
-      TaskLedBlink(100,50);
+      delay(100);
       printf(".");
       fflush(stdout);
     }
@@ -260,7 +243,6 @@ bool sendMqtt()
 void workTask(void *taskParm)
 {
     printf("Work task started\n");
-    TaskLedBlink(150,100);
 
     g_measureOk = doMeasurement(g_temperature, g_humidity);
     if (g_measureOk)
@@ -268,14 +250,11 @@ void workTask(void *taskParm)
     else
         printf("Am2320: Measurement failed\n");
 
-    TaskLedBlink(150,100);
-
     if (connectWiFi());
         g_wifiOk = true;
 
     if (g_wifiOk)
     {
-        TaskLedOn(true);
         g_sendOk = sendMqtt();
     }
 
@@ -313,35 +292,33 @@ void setup()
 
     if (g_adc == 0xFFF && g_resetReason != RTCWDT_RTC_RESET)
     {
-        // restart using RTC
-        printf("Forcing RTC restart\n");
+        // reset using RTC
+        printf("Forcing RTC reset\n");
         fflush(stdout);
 
         armRtcWatchdog(100);
         delay(1000);
 
-        printf("RTC restart failed!\n");
+        printf("RTC reset failed!\n");
     }
+
+    LedOn(true);
 
     armRtcWatchdog((CONFIG_WORK_TIMEOUT+CONFIG_TIMEOUT_TO_WDT_RESET) * 1000);
 
     g_events = xEventGroupCreate();
-    g_ledMutex = xSemaphoreCreateMutex();
 
-    xTaskCreatePinnedToCore(workTask, "work_task", configMINIMAL_STACK_SIZE * 8, NULL, 5, NULL, APP_CPU_NUM);
+    xTaskCreatePinnedToCore(workTask, "work_task", configMINIMAL_STACK_SIZE * 8, NULL, 1, NULL, APP_CPU_NUM);
 
     EventBits_t ev = xEventGroupWaitBits(g_events, EVENT_BIT_WORK_DONE, 
-        pdFALSE, pdTRUE, CONFIG_WORK_TIMEOUT * 1000 / portTICK_PERIOD_MS);    
+        pdTRUE, pdTRUE, CONFIG_WORK_TIMEOUT * 1000 / portTICK_PERIOD_MS);
 
     if ((ev & EVENT_BIT_WORK_DONE) == 0)
         printf("Wait timeout (%d s)\n", CONFIG_WORK_TIMEOUT);
     else
         printf("Work done\n");
 
-    // disallow led access for task (possibly continuing running)
-    xSemaphoreTake(g_ledMutex, portMAX_DELAY);
     g_shutdown = true;
-    xSemaphoreGive(g_ledMutex);
 
     LedOn(false);
 
